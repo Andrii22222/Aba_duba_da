@@ -1,44 +1,77 @@
-import random
-import pymorphy2
-import time
+import cv2
+import mediapipe as mp
 
-start_time = time.time()
+# Ініціалізація Mediapipe
+mp_hands = mp.solutions.hands  # модуль для розпізнавання рук
+mp_face_mesh = mp.solutions.face_mesh #модуль для розпізнавання обличчя (мережа ключових точок)
+mp_drawing = mp.solutions.drawing_utils  #допоміжний інструмент для малювання точок і з'єднань
 
-lower_vowels = "аеєиіїоуюя"
-upper_vowels = "АЕЄИІЇОУЮЯ"
-lower_not_vowels = "бвгджзйклмнпрстфхцчшщ"
-upper_not_vowels = "БВГДЖЗЙКЛМНПРСТФХЦЧШЩ"
-alphabet = list("аеєиіїоуюябвгджзйклмнпрстфхцчшщ")
+# Захоплення відеопотоку
+cap = cv2.VideoCapture(0) #основна камера 0
+#(Довіра)
+hands = mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
-morph = pymorphy2.MorphAnalyzer(lang='uk')
+emotion_text = ""
+# original_bg = None
+# previous_mouth_state = None
 
-cnt_shlack = 0
-cnt_norm = 0
-while True:
-    length = 5  # random.randint(4,10)
-    result = (str(random.choice(alphabet))).upper()
-    # result = np.random.choice(alphabet).upper()
-    for i in range(1, length):
-        # result += np.random.choice(alphabet)
-        result += str(random.choice(alphabet))
+# Цикл обробки відео (зчитування кадрів з камери)
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-    parsed = morph.parse(result)
-    if any(p.is_known for p in parsed):
-        cnt_norm += 1
-        end_time = time.time()
-        all_time = end_time - start_time
-        if int(all_time + 1) % 30 == 0:
-            print(f"Знайдено шлаку: {cnt_shlack}\nЗнайдено слів: {cnt_norm}")
-            print(f"Пройшло: {all_time} секунд!")
+    frame = cv2.flip(frame, 1)  # Дзеркальне відображення для зручності
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) #(конвертація BGR в RGB)
 
-        if result == "Артем":
-            print("Ура! Слово *Артем* знайдено! На це нам знадобилось: ", all_time)
-            print(f"Знайдено шлаку: {cnt_shlack}\nЗнайдено слів: {cnt_norm}")
-            break
-    else:
-        cnt_shlack += 1
-# Знайдено шлаку: 91439
-# Знайдено слів: 856
+    # Обробка обличчя (Здивування по точках)
+    face_results = face_mesh.process(rgb_frame)
+    if face_results.multi_face_landmarks:
+        for face_landmarks in face_results.multi_face_landmarks:
+            mouth_top = face_landmarks.landmark[13]
+            mouth_bottom = face_landmarks.landmark[14]
+            mouth_open = abs(mouth_top.y - mouth_bottom.y) > 0.02
 
-# Знайдено шлаку: 57361
-# Знайдено слів: 527
+            if mouth_open:
+                emotion_text = "Surprised"
+            else:
+                emotion_text = "Neutral"
+
+            h, w, _ = frame.shape
+            x, y = int(face_landmarks.landmark[10].x * w), int(face_landmarks.landmark[10].y * h)
+            cv2.putText(frame, emotion_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    # Обробка рук
+    hand_results = hands.process(rgb_frame)
+    clenched_fist = False
+
+    if hand_results.multi_hand_landmarks:
+        for hand_landmarks in hand_results.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+            # Координати пальців для перевірки стискання в кулак
+            tip_ids = [4, 8, 12, 16, 20]
+            fingers = []
+            for tip in tip_ids:
+                if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[tip - 2].y:
+                    fingers.append(1)
+                else:
+                    fingers.append(0)
+
+            if sum(fingers) == 0:
+                clenched_fist = True
+
+    # Зміна фону при стиснутому кулаці
+    if clenched_fist:
+        frame[:] = (0, 255, 0)  # Зелений фон
+
+    cv2.imshow('Face & Hand Detection', frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
+
